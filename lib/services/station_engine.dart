@@ -1,0 +1,199 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
+
+import '../data/station_templates.dart';
+import '../models/genre_preference.dart';
+import '../models/radio_station.dart';
+import '../models/song.dart';
+import 'llm_service.dart';
+import 'station_storage.dart';
+import 'youtube_service.dart';
+
+/// Orchestrates LLM song generation + YouTube resolution + queue management
+/// for all stations.
+class StationEngine extends ChangeNotifier {
+  final LlmService _llm;
+  final YoutubeService _youtube;
+  final StationStorage _storage;
+  final List<GenrePreference> Function() _tastesGetter;
+
+  final List<RadioStation> _stations = [];
+  final _uuid = const Uuid();
+
+  // Coalesce rapid notifyListeners-driven saves.
+  Timer? _saveDebounce;
+
+  StationEngine({
+    required LlmService llm,
+    required YoutubeService youtube,
+    required StationStorage storage,
+    required List<GenrePreference> Function() tastesGetter,
+  })  : _llm = llm,
+        _youtube = youtube,
+        _storage = storage,
+        _tastesGetter = tastesGetter;
+
+  List<RadioStation> get stations => List.unmodifiable(_stations);
+
+  /// Restore stations from disk and (only if needed) warm up missing ones.
+  Future<void> initializeDefaults() async {
+    if (_stations.isNotEmpty) return;
+
+    // Load any persisted stations first.
+    final persisted = await _storage.load();
+    final persistedById = {for (final s in persisted) s.id: s};
+
+    // Ensure all template stations exist; preserve persisted custom stations.
+    for (final tpl in kStationTemplates) {
+      if (persistedById.containsKey(tpl.id)) {
+        _stations.add(persistedById.remove(tpl.id)!);
+      } else {
+        _stations.add(RadioStation(
+          id: tpl.id,
+          name: tpl.name,
+          tagline: tpl.tagline,
+          emoji: tpl.emoji,
+          moodPrompt: tpl.moodPrompt,
+        ));
+      }
+    }
+    // Any remaining persisted stations are user-created customs — keep them
+    // pinned at the top of the list.
+    final customs = persistedById.values.where((s) => s.isCustom).toList();
+    for (final c in customs.reversed) {
+      _stations.insert(0, c);
+    }
+
+    notifyListeners();
+
+    // Only warm up stations that don't already have a usable queue.
+    for (final station in _stations) {
+      final hasUnplayedWithVideo =
+          station.queue.any((s) => !s.played && s.youtubeVideoId != null);
+      if (!hasUnplayedWithVideo) {
+        // Don't await — let stations warm in parallel.
+        _warmUpStation(station);
+      }
+    }
+  }
+
+  /// Add a custom prompt-based station.
+  Future<RadioStation> addCustomStation(String userPrompt) async {
+    final meta = await _llm.generateStationFromPrompt(userPrompt);
+    final station = RadioStation(
+      id: _uuid.v4(),
+      name: meta.name,
+      tagline: meta.tagline,
+      emoji: meta.emoji.isEmpty ? '🎧' : meta.emoji,
+      moodPrompt: meta.moodPrompt,
+      isCustom: true,
+    );
+    _stations.insert(0, station);
+    notifyListeners();
+    _scheduleSave();
+    _warmUpStation(station);
+    return station;
+  }
+
+  Future<void> _warmUpStation(RadioStation station) async {
+    if (station.isGenerating) return;
+    station.isGenerating = true;
+    notifyListeners();
+    try {
+      final songs = await _llm.generateSongs(
+        moodPrompt: station.moodPrompt,
+        tastes: _tastesGetter(),
+        history: station.history,
+        currentQueue: station.queue,
+        count: 5,
+      );
+      station.queue.addAll(songs);
+      _scheduleSave();
+      notifyListeners();
+
+      for (final song in songs) {
+        final ok = await _youtube.resolveSong(song);
+        if (ok && !station.isWarmedUp) {
+          station.isWarmedUp = true;
+        }
+        _scheduleSave();
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Failed to warm up station ${station.name}: $e');
+    } finally {
+      station.isGenerating = false;
+      notifyListeners();
+    }
+  }
+
+  /// Replenish the queue with N more songs (called when only 2 unplayed remain).
+  Future<void> replenish(RadioStation station, {int count = 5}) async {
+    if (station.isGenerating) return;
+    station.isGenerating = true;
+    notifyListeners();
+    try {
+      final songs = await _llm.generateSongs(
+        moodPrompt: station.moodPrompt,
+        tastes: _tastesGetter(),
+        history: station.history,
+        currentQueue: station.queue,
+        count: count,
+      );
+      station.queue.addAll(songs);
+      _scheduleSave();
+      notifyListeners();
+      for (final song in songs) {
+        await _youtube.resolveSong(song);
+        _scheduleSave();
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('Failed to replenish ${station.name}: $e');
+    } finally {
+      station.isGenerating = false;
+      notifyListeners();
+    }
+  }
+
+  /// Resolve a specific song's YouTube stream (used for lazy prefetch and
+  /// for refreshing expired stream URLs at play time).
+  Future<bool> ensureSongResolved(Song song) async {
+    if (song.streamUrl != null) return true;
+    final ok = await _youtube.resolveSong(song);
+    notifyListeners();
+    return ok;
+  }
+
+  /// Mark a song as played and move it to history.
+  void markPlayed(RadioStation station, Song song) {
+    song.played = true;
+    if (!station.history.contains(song)) {
+      station.history.add(song);
+    }
+    _scheduleSave();
+    notifyListeners();
+  }
+
+  void notifyChange() {
+    _scheduleSave();
+    notifyListeners();
+  }
+
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 500), () {
+      _storage.save(_stations);
+    });
+  }
+
+  @override
+  void dispose() {
+    _saveDebounce?.cancel();
+    // Best-effort flush on dispose.
+    _storage.save(_stations);
+    super.dispose();
+  }
+}
