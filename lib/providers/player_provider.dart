@@ -190,14 +190,25 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   /// Find the next unplayed song after [_currentSong] and resolve its
-  /// videoId in the background (no stream URL fetch yet).
+  /// videoId in the background (no stream URL fetch yet). If the LLM
+  /// picker rejects every candidate (or YouTube has nothing), discard
+  /// the song eagerly so we don't waste another search+LLM round-trip
+  /// re-asking the same question when we reach it.
   void _prefetchNextVideoId() {
     final station = _currentStation;
     if (station == null) return;
     for (final s in station.queue) {
       if (!s.played && s != _currentSong) {
         if (s.youtubeVideoId == null) {
-          unawaited(engine.ensureVideoIdResolved(s));
+          unawaited(() async {
+            final ok = await engine.ensureVideoIdResolved(s);
+            if (!ok && _currentStation == station && s != _currentSong) {
+              debugPrint('Prefetch: discarding unresolvable "${s.title}"');
+              engine.discardSong(station, s);
+              // Try the song after it.
+              _prefetchNextVideoId();
+            }
+          }());
         }
         return;
       }
