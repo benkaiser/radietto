@@ -228,6 +228,8 @@ Respond with JSON in this exact shape:
 {"songs": [{"title": "Song Title", "artist": "Artist Name"}, ...]}
 
 Choose real, well-known songs that exist on YouTube. Do not invent songs.
+
+Each song you return must have a UNIQUE title (no two songs in the list with the same title). If you can only think of a few real songs that fit, return fewer songs rather than padding the list with duplicates or fabrications.
 ''';
 
     final body = _baseBody(
@@ -237,7 +239,11 @@ Choose real, well-known songs that exist on YouTube. Do not invent songs.
       // 'low'; without a generous cap, finish_reason=length truncates the
       // JSON content mid-string. 4000 leaves plenty of headroom.
       maxTokens: 4000,
-      reasoning: const {'effort': 'low'},
+      // 'low' was causing the model to panic when it couldn't satisfy the
+      // avoid-list within a tight budget — it spiralled and emitted three
+      // copies of the same title with different artists. 'medium' gives
+      // it enough room to plan a clean list.
+      reasoning: const {'effort': 'medium'},
     );
     final content = await _chat(tag: 'generateSongs', body: body);
     final dynamic parsed = jsonDecode(content);
@@ -249,12 +255,29 @@ Choose real, well-known songs that exist on YouTube. Do not invent songs.
       );
     }
 
-    return rawSongs.whereType<Map>().map((m) {
+    // Build the avoid set so we can drop anything the model echoed back
+    // despite our prompt asking it not to.
+    String norm(String s) => s.toLowerCase().trim();
+    final avoidKeys = <String>{
+      for (final s in [...currentQueue, ...history])
+        '${norm(s.title)}|${norm(s.artist)}',
+    };
+    final seenTitles = <String>{};
+    final out = <Song>[];
+    for (final m in rawSongs.whereType<Map>()) {
       final s = m.cast<String, dynamic>();
       final title = (s['title'] ?? s['name'] ?? s['song'] ?? '').toString().trim();
       final artist = (s['artist'] ?? s['by'] ?? s['author'] ?? '').toString().trim();
-      return Song(id: _uuid.v4(), title: title, artist: artist);
-    }).where((s) => s.title.isNotEmpty && s.artist.isNotEmpty).toList();
+      if (title.isEmpty || artist.isEmpty) continue;
+      final tKey = norm(title);
+      // Reject duplicate titles within this response (the model's panic
+      // fallback when it can't find enough unique tracks).
+      if (!seenTitles.add(tKey)) continue;
+      // Reject anything already in the avoid list.
+      if (avoidKeys.contains('$tKey|${norm(artist)}')) continue;
+      out.add(Song(id: _uuid.v4(), title: title, artist: artist));
+    }
+    return out;
   }
 
   /// Find a list of song-like maps in arbitrarily-shaped LLM output.
