@@ -55,6 +55,7 @@ class YoutubeService {
   /// Returns true on success, false on failure. Mutates [song] in place.
   Future<bool> resolveVideoId(Song song) async {
     if (song.youtubeVideoId != null) return true;
+    debugPrint('▶ resolveVideoId "${song.title}" — ${song.artist}');
     song.status = SongResolutionStatus.resolving;
 
     final yt = YoutubeExplode();
@@ -129,6 +130,7 @@ class YoutubeService {
   /// If [song.youtubeVideoId] is null, this calls [resolveVideoId] first.
   Future<bool> resolveStreamUrl(Song song) async {
     if (song.streamUrl != null) return true;
+    debugPrint('▶ resolveStreamUrl "${song.title}" — videoId=${song.youtubeVideoId}');
     if (song.youtubeVideoId == null) {
       final ok = await resolveVideoId(song);
       if (!ok) return false;

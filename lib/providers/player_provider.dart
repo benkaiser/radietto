@@ -94,6 +94,9 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   Future<void> playStation(RadioStation station) async {
+    debugPrint('▶ playStation("${station.name}") — '
+        'queue=${station.queue.length} unplayed=${station.unplayedCount} '
+        'isWarmed=${station.isWarmedUp} isGenerating=${station.isGenerating}');
     _currentStation = station;
 
     // If this station has a saved playback position from a previous
@@ -128,6 +131,8 @@ class PlayerProvider extends ChangeNotifier {
   /// load is abandoned via _playRequestId.
   Future<void> _playSongSnappy(RadioStation station, Song song) async {
     final requestId = ++_playRequestId;
+    debugPrint('▶ _playSongSnappy(req=$requestId) "${song.title}" — '
+        'videoId=${song.youtubeVideoId} streamUrl=${song.streamUrl != null ? 'set' : 'null'}');
     _currentStation = station;
     _currentSong = song;
     _isPreparing = true;
@@ -135,12 +140,15 @@ class PlayerProvider extends ChangeNotifier {
     notifyListeners();
 
     if (song.streamUrl == null) {
+      debugPrint('  ↳ resolving stream for "${song.title}"…');
       final ok = await engine.ensureSongResolved(song);
-      if (requestId != _playRequestId) return; // user skipped, abandon
+      debugPrint('  ↳ ensureSongResolved("${song.title}") → $ok');
+      if (requestId != _playRequestId) {
+        debugPrint('  ↳ stale request, abandoning');
+        return;
+      }
       if (!ok) {
-        // Couldn't find a YouTube video for this song (likely hallucinated
-        // by the LLM or just not on YouTube). Drop it from the queue
-        // without adding to history and try the next pick.
+        debugPrint('  ↳ discarding "${song.title}" and advancing');
         await _discardAndAdvance(song);
         return;
       }
@@ -227,15 +235,20 @@ class PlayerProvider extends ChangeNotifier {
   Future<void> _discardAndAdvance(Song failed) async {
     final station = _currentStation;
     if (station == null) return;
+    debugPrint('✂ _discardAndAdvance "${failed.title}" — '
+        'queue size before=${station.queue.length}');
     engine.discardSong(station, failed);
     if (_currentSong == failed) _currentSong = null;
 
     Song? next = _pickNext(station);
     if (next == null) {
+      debugPrint('  ↳ queue empty after discard, replenishing…');
       await engine.replenish(station);
       next = _pickNext(station);
+      debugPrint('  ↳ post-replenish next=${next?.title ?? 'NULL'}');
     }
     if (next == null) {
+      debugPrint('  ↳ still no song after replenish; giving up');
       _isPreparing = false;
       notifyListeners();
       return;
