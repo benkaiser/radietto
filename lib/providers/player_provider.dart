@@ -25,10 +25,49 @@ class PlayerProvider extends ChangeNotifier {
   /// instantly even though the stream isn't ready yet.
   bool _isPreparing = false;
 
+  /// Position to seek to once the next song's audio has finished loading.
+  /// Set by [playStation] when resuming a station mid-song.
+  Duration? _pendingResumePosition;
+
+  /// Whether we've already retried the current song after a playback
+  /// error. Lets us refresh the YouTube stream URL once before giving
+  /// up and skipping.
+  bool _hasRetriedCurrent = false;
+
+  /// Bookkeeping so we don't hammer the disk on every position tick;
+  /// we only persist progress once per [_positionSaveInterval].
+  static const Duration _positionSaveInterval = Duration(seconds: 5);
+  DateTime _lastPositionSave = DateTime.fromMillisecondsSinceEpoch(0);
+  StreamSubscription<Duration>? _positionSub;
+
   PlayerProvider({required this.audioHandler, required this.engine}) {
     audioHandler.onNearEnd = _handleNearEnd;
     audioHandler.onTrackComplete = _handleTrackComplete;
     audioHandler.onSkipNextRequested = skipCurrent;
+    audioHandler.onPlaybackError = _handlePlaybackError;
+    _positionSub =
+        audioHandler.player.positionStream.listen(_onPositionTick);
+  }
+
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    super.dispose();
+  }
+
+  void _onPositionTick(Duration pos) {
+    final station = _currentStation;
+    final song = _currentSong;
+    if (station == null || song == null) return;
+    if (_isPreparing) return;
+    final now = DateTime.now();
+    if (now.difference(_lastPositionSave) < _positionSaveInterval) return;
+    _lastPositionSave = now;
+    engine.recordPlaybackPosition(
+      station: station,
+      songId: song.id,
+      positionMs: pos.inMilliseconds,
+    );
   }
 
   RadioStation? get currentStation => _currentStation;
@@ -56,11 +95,30 @@ class PlayerProvider extends ChangeNotifier {
 
   Future<void> playStation(RadioStation station) async {
     _currentStation = station;
-    final next = _pickNext(station);
+
+    // If this station has a saved playback position from a previous
+    // session/listen, try to resume the same song mid-stream — that's
+    // how a real radio station behaves when you tune back to it.
+    Song? resumeTarget;
+    if (station.lastPlayedSongId != null) {
+      for (final s in station.queue) {
+        if (s.id == station.lastPlayedSongId && !s.played) {
+          resumeTarget = s;
+          break;
+        }
+      }
+    }
+
+    final next = resumeTarget ?? _pickNext(station);
     if (next == null) {
       _currentSong = null;
       notifyListeners();
       return;
+    }
+
+    if (resumeTarget != null && station.lastPlayedPositionMs != null) {
+      _pendingResumePosition =
+          Duration(milliseconds: station.lastPlayedPositionMs!);
     }
     await _playSongSnappy(station, next);
   }
@@ -73,6 +131,7 @@ class PlayerProvider extends ChangeNotifier {
     _currentStation = station;
     _currentSong = song;
     _isPreparing = true;
+    _hasRetriedCurrent = false;
     notifyListeners();
 
     if (song.streamUrl == null) {
@@ -97,6 +156,22 @@ class PlayerProvider extends ChangeNotifier {
       return;
     }
     if (requestId != _playRequestId) return;
+
+    // If we were resuming a station mid-song, seek now that the audio
+    // has loaded. Clamp to a few seconds before the end so we don't
+    // immediately fire processingState.completed.
+    final resumeTo = _pendingResumePosition;
+    _pendingResumePosition = null;
+    if (resumeTo != null && resumeTo > const Duration(seconds: 1)) {
+      final dur = song.duration;
+      final safe = (dur != null && resumeTo >= dur - const Duration(seconds: 5))
+          ? Duration.zero
+          : resumeTo;
+      if (safe > Duration.zero) {
+        await audioHandler.seek(safe);
+      }
+    }
+
     _isPreparing = false;
     notifyListeners();
     _maybeReplenish();
@@ -163,6 +238,66 @@ class PlayerProvider extends ChangeNotifier {
 
   Future<void> _handleTrackComplete() async {
     await _advanceToNext();
+  }
+
+  /// Called by [audioHandler] when the underlying player emits an error
+  /// (network drop, expired URL, decoder failure, etc). We give the
+  /// current song one shot at a fresh stream URL before skipping.
+  Future<void> _handlePlaybackError(Object error) async {
+    final station = _currentStation;
+    final song = _currentSong;
+    if (station == null || song == null) return;
+
+    debugPrint('Playback error on "${song.title}": $error');
+
+    if (_hasRetriedCurrent) {
+      // Already retried once — give up on this track.
+      debugPrint('Already retried; advancing to next song.');
+      song.played = true;
+      await _advanceToNext();
+      return;
+    }
+    _hasRetriedCurrent = true;
+
+    // Resume from where we were when it failed (don't restart the song
+    // from the beginning).
+    final resumeFrom = audioHandler.player.position;
+    if (resumeFrom > const Duration(seconds: 2)) {
+      _pendingResumePosition = resumeFrom;
+    }
+
+    // Drop the stale URL and re-fetch a fresh one from YouTube.
+    song.streamUrl = null;
+    final requestId = ++_playRequestId;
+    _isPreparing = true;
+    notifyListeners();
+
+    final ok = await engine.ensureStreamUrlResolved(song);
+    if (requestId != _playRequestId) return;
+    if (!ok) {
+      song.played = true;
+      await _advanceToNext();
+      return;
+    }
+
+    try {
+      await audioHandler.playSong(song, stationName: station.name);
+    } catch (e) {
+      if (requestId != _playRequestId) return;
+      song.played = true;
+      await _advanceToNext();
+      return;
+    }
+    if (requestId != _playRequestId) return;
+
+    final resumeTo = _pendingResumePosition;
+    _pendingResumePosition = null;
+    if (resumeTo != null && resumeTo > const Duration(seconds: 1)) {
+      await audioHandler.seek(resumeTo);
+    }
+
+    _isPreparing = false;
+    notifyListeners();
   }
 
   Future<void> skipCurrent() async {

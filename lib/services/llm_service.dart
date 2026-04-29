@@ -183,7 +183,12 @@ class LlmService {
 
   String _formatFeedback(List<Song> history) {
     if (history.isEmpty) return '';
-    final rated = history.where((s) => s.rating != null).toList();
+    // Skips are stored on the song for our own bookkeeping but intentionally
+    // NOT surfaced to the LLM — a skip is too noisy a signal (people skip
+    // for many reasons unrelated to the song's quality on this station).
+    final rated = history
+        .where((s) => s.rating != null && s.rating != SongRating.skip)
+        .toList();
     if (rated.isEmpty) return '';
     final recent = rated.length > 15 ? rated.sublist(rated.length - 15) : rated;
     final lines = recent.map((s) {

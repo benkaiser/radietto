@@ -19,10 +19,23 @@ class RadiettoAudioHandler extends BaseAudioHandler with SeekHandler {
   /// Called when a skip is requested (next).
   Future<void> Function()? onSkipNextRequested;
 
+  /// Called when the underlying player emits a playback error
+  /// (network drop, expired URL, decoder failure).
+  Future<void> Function(Object error)? onPlaybackError;
+
   bool _nearEndFired = false;
 
   RadiettoAudioHandler() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
+
+    // Surface errors from the underlying player so callers can decide
+    // whether to retry or skip.
+    _player.playbackEventStream.listen(
+      (_) {},
+      onError: (Object e, StackTrace st) {
+        onPlaybackError?.call(e);
+      },
+    );
 
     // Position-based lazy prefetch trigger.
     _player.positionStream.listen((pos) {

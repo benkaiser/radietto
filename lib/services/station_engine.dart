@@ -243,6 +243,19 @@ class StationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Record the current playback position for [station] so we can resume
+  /// mid-song if the user switches stations or relaunches the app.
+  /// Intentionally does NOT call notifyListeners — this fires very often.
+  void recordPlaybackPosition({
+    required RadioStation station,
+    required String songId,
+    required int positionMs,
+  }) {
+    station.lastPlayedSongId = songId;
+    station.lastPlayedPositionMs = positionMs;
+    _scheduleSave();
+  }
+
   void _scheduleSave() {
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 500), () {

@@ -15,6 +15,12 @@ class RadioStation {
   bool isWarmedUp;
   bool isGenerating;
 
+  /// Last song that was playing on this station (by id) and the position
+  /// reached within it. Used to resume mid-song when the user returns to
+  /// this station or relaunches the app.
+  String? lastPlayedSongId;
+  int? lastPlayedPositionMs;
+
   RadioStation({
     required this.id,
     required this.name,
@@ -26,6 +32,8 @@ class RadioStation {
     List<Song>? history,
     this.isWarmedUp = false,
     this.isGenerating = false,
+    this.lastPlayedSongId,
+    this.lastPlayedPositionMs,
   })  : queue = queue ?? [],
         history = history ?? [];
 
@@ -68,6 +76,8 @@ class RadioStation {
         'isCustom': isCustom,
         'queue': queue.map((s) => s.toJson()).toList(),
         'history': history.map((s) => s.toJson()).toList(),
+        'lastPlayedSongId': lastPlayedSongId,
+        'lastPlayedPositionMs': lastPlayedPositionMs,
       };
 
   factory RadioStation.fromJson(Map<String, dynamic> json) {
@@ -86,6 +96,8 @@ class RadioStation {
       isCustom: json['isCustom'] as bool? ?? false,
       queue: queue,
       history: history,
+      lastPlayedSongId: json['lastPlayedSongId'] as String?,
+      lastPlayedPositionMs: json['lastPlayedPositionMs'] as int?,
     );
     // Station is warm if there's any unplayed song queued — videoIds
     // and stream URLs are resolved just-in-time on playback.
