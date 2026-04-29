@@ -109,6 +109,20 @@ class RadiettoApp extends StatelessWidget {
             ),
           ),
         ),
+        // Global desktop shortcut: spacebar toggles play/pause. The
+        // TextField inside the custom-station bottom sheet still
+        // consumes space first (because it has primary focus), so
+        // typing isn't disrupted.
+        builder: (context, child) {
+          return CallbackShortcuts(
+            bindings: <ShortcutActivator, VoidCallback>{
+              const SingleActivator(LogicalKeyboardKey.space): () {
+                player.togglePlayPause();
+              },
+            },
+            child: Focus(autofocus: true, child: child!),
+          );
+        },
         home: tasteProvider.onboardingDone
             ? const RadioBrowserScreen()
             : const TasteOnboardingScreen(),
