@@ -146,13 +146,17 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
       body: stations.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : GridView.builder(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(16),
+              // Desktop-friendly: cap card width so the grid grows columns
+              // on wider windows instead of stretching two giant cards
+              // across the screen. On phones this still gives one or two
+              // columns naturally.
               gridDelegate:
-                  const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.95,
+                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 320,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                childAspectRatio: 1.25,
               ),
               itemCount: stations.length,
               itemBuilder: (context, i) {
