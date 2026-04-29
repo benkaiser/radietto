@@ -190,6 +190,28 @@ class PlayerProvider extends ChangeNotifier {
     await _advanceToNext();
   }
 
+  /// Toggle a rating on any song (typically from the history list — the
+  /// caller doesn't have to be the currently-playing song). Tapping the
+  /// same rating again clears it.
+  void rateSong(Song song, SongRating rating) {
+    if (song.rating == rating) {
+      song.rating = null;
+    } else {
+      song.rating = rating;
+    }
+    engine.persistRatings();
+    notifyListeners();
+  }
+
+  /// Replay a song from the history list. The song stays in history (we
+  /// don't reorder anything) and once it finishes we resume the regular
+  /// forward-only queue — true to the spirit of radio.
+  Future<void> playFromHistory(Song song) async {
+    final station = _currentStation;
+    if (station == null) return;
+    await _playSongSnappy(station, song);
+  }
+
   Future<void> togglePlayPause() async {
     if (audioHandler.player.playing) {
       await audioHandler.pause();

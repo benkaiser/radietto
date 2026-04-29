@@ -236,6 +236,13 @@ class StationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Public hook for callers (e.g. PlayerProvider rating a history song)
+  /// that have already mutated state on a Song and just need it persisted.
+  void persistRatings() {
+    _scheduleSave();
+    notifyListeners();
+  }
+
   void _scheduleSave() {
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 500), () {
