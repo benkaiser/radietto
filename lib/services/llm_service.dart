@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
@@ -33,7 +34,7 @@ class GeneratedStation {
 class LlmService {
   static const String _endpoint =
       'https://openrouter.ai/api/v1/chat/completions';
-  static const String _model = 'openai/gpt-oss-120b';
+  static const String _model = 'openai/gpt-oss-120b:nitro';
 
   final http.Client _client;
   final _uuid = const Uuid();
@@ -50,27 +51,113 @@ class LlmService {
         'X-Title': 'Radietto',
       };
 
-  /// Build the body with provider preference for Cerebras (fastest), with fallbacks allowed.
+  /// Pretty-print long strings for debug logs without overwhelming the console.
+  void _debugLog(String label, String body) {
+    if (!kDebugMode) return;
+    const chunk = 800;
+    debugPrint('── LLM $label ──');
+    for (var i = 0; i < body.length; i += chunk) {
+      debugPrint(body.substring(i, i + chunk > body.length ? body.length : i + chunk));
+    }
+    debugPrint('── /LLM $label ──');
+  }
+
+  /// POST to the chat completions endpoint with debug-mode logging of
+  /// prompts and raw responses. Returns the assistant's content string.
+  Future<String> _chat({
+    required String tag,
+    required Map<String, dynamic> body,
+  }) async {
+    if (kDebugMode) {
+      final messages = body['messages'] as List;
+      final sys = (messages.first as Map)['content'] as String;
+      final usr = (messages.last as Map)['content'] as String;
+      _debugLog('$tag → model=${body['model']} system', sys);
+      _debugLog('$tag → user', usr);
+    }
+
+    final response = await _client.post(
+      Uri.parse(_endpoint),
+      headers: _headers,
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode != 200) {
+      _debugLog('$tag ← HTTP ${response.statusCode}', response.body);
+      throw Exception(
+        'LLM call "$tag" failed: ${response.statusCode} ${response.body}',
+      );
+    }
+
+    // Always log the raw envelope in debug mode so we can see what the
+    // provider actually returned (some reasoning models leave `content`
+    // empty and put output under `reasoning` or `reasoning_content`).
+    _debugLog('$tag ← raw', response.body);
+
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final choices = decoded['choices'] as List?;
+    if (choices == null || choices.isEmpty) {
+      throw Exception('LLM call "$tag" returned no choices: ${response.body}');
+    }
+    final choice = choices.first as Map;
+    // OpenRouter sometimes returns 200 OK while the upstream provider
+    // (Groq, etc.) failed — the failure shows up inside the choice.
+    final upstreamError = choice['error'];
+    if (upstreamError is Map) {
+      throw Exception(
+        'LLM call "$tag" upstream error '
+        '(${upstreamError['code']}): ${upstreamError['message']}',
+      );
+    }
+    final message = choice['message'] as Map?;
+    if (message == null) {
+      throw Exception('LLM call "$tag" returned no message: ${response.body}');
+    }
+
+    // Prefer `content`; some reasoning-model providers put structured output
+    // in `reasoning` / `reasoning_content` when `content` is empty/null.
+    String? content = message['content'] as String?;
+    if (content == null || content.trim().isEmpty) {
+      content = (message['reasoning_content'] as String?) ??
+          (message['reasoning'] as String?);
+    }
+    if (content == null || content.trim().isEmpty) {
+      throw Exception(
+        'LLM call "$tag" returned empty content. Raw: ${response.body}',
+      );
+    }
+    _debugLog('$tag ← content', content);
+    return content;
+  }
+
+  /// Build the body. `:nitro` model variants already route to the fastest
+  /// throughput-optimized providers, so we just allow fallbacks by default.
   Map<String, dynamic> _baseBody({
     required String systemPrompt,
     required String userPrompt,
+    String? model,
+    double temperature = 0.9,
+    int maxTokens = 1500,
+    Map<String, dynamic>? providerOverride,
+    Map<String, dynamic>? reasoning,
   }) {
-    return {
-      'model': _model,
+    final body = <String, dynamic>{
+      'model': model ?? _model,
       'messages': [
         {'role': 'system', 'content': systemPrompt},
         {'role': 'user', 'content': userPrompt},
       ],
       'response_format': {'type': 'json_object'},
-      // Prefer Cerebras for fast throughput; fall back to other providers if unavailable.
-      'provider': {
-        'order': ['cerebras'],
-        'allow_fallbacks': true,
-        'sort': 'throughput',
-      },
-      'temperature': 0.9,
-      'max_tokens': 1500,
+      'provider': providerOverride ??
+          const {
+            'sort': 'throughput',
+            'allow_fallbacks': true,
+          },
+      'temperature': temperature,
+      'max_tokens': maxTokens,
     };
+    if (reasoning != null) body['reasoning'] = reasoning;
+    return body;
   }
 
   String _formatTastes(List<GenrePreference> tastes) {
@@ -134,31 +221,50 @@ Choose real, well-known songs that exist on YouTube. Do not invent songs.
 ''';
 
     final body = _baseBody(systemPrompt: systemPrompt, userPrompt: userPrompt);
+    final content = await _chat(tag: 'generateSongs', body: body);
+    final dynamic parsed = jsonDecode(content);
 
-    final response = await _client.post(
-      Uri.parse(_endpoint),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
-
-    if (response.statusCode != 200) {
+    final List<dynamic>? rawSongs = _extractSongList(parsed);
+    if (rawSongs == null) {
       throw Exception(
-        'LLM song generation failed: ${response.statusCode} ${response.body}',
+        'LLM response did not contain a recognizable song list. Raw content: $content',
       );
     }
 
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    final content = decoded['choices'][0]['message']['content'] as String;
-    final parsed = jsonDecode(content) as Map<String, dynamic>;
-    final songs = (parsed['songs'] as List).cast<Map<String, dynamic>>();
+    return rawSongs.whereType<Map>().map((m) {
+      final s = m.cast<String, dynamic>();
+      final title = (s['title'] ?? s['name'] ?? s['song'] ?? '').toString().trim();
+      final artist = (s['artist'] ?? s['by'] ?? s['author'] ?? '').toString().trim();
+      return Song(id: _uuid.v4(), title: title, artist: artist);
+    }).where((s) => s.title.isNotEmpty && s.artist.isNotEmpty).toList();
+  }
 
-    return songs.map((s) {
-      return Song(
-        id: _uuid.v4(),
-        title: (s['title'] as String).trim(),
-        artist: (s['artist'] as String).trim(),
-      );
-    }).toList();
+  /// Find a list of song-like maps in arbitrarily-shaped LLM output.
+  List<dynamic>? _extractSongList(dynamic parsed) {
+    if (parsed is List) return parsed;
+    if (parsed is Map) {
+      // Common keys we might see across providers/models.
+      for (final key in const [
+        'songs',
+        'tracks',
+        'playlist',
+        'items',
+        'results',
+        'data',
+      ]) {
+        final v = parsed[key];
+        if (v is List) return v;
+      }
+      // Fall back to first List-valued entry.
+      for (final v in parsed.values) {
+        if (v is List) return v;
+        if (v is Map) {
+          final inner = _extractSongList(v);
+          if (inner != null) return inner;
+        }
+      }
+    }
+    return null;
   }
 
   /// Generate a custom station from a user prompt.
@@ -179,20 +285,7 @@ Respond with JSON:
 ''',
     );
 
-    final response = await _client.post(
-      Uri.parse(_endpoint),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'LLM station generation failed: ${response.statusCode} ${response.body}',
-      );
-    }
-
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    final content = decoded['choices'][0]['message']['content'] as String;
+    final content = await _chat(tag: 'generateStation', body: body);
     final parsed = jsonDecode(content) as Map<String, dynamic>;
 
     return GeneratedStation(
@@ -201,6 +294,103 @@ Respond with JSON:
       emoji: (parsed['emoji'] as String).trim(),
       moodPrompt: (parsed['moodPrompt'] as String).trim(),
     );
+  }
+
+  /// Candidate description for the YouTube video picker.
+  /// Each candidate must have `videoId`, `title`, `channel`, and `durationSeconds`.
+  Future<String?> pickBestYoutubeVideo({
+    required String title,
+    required String artist,
+    required List<Map<String, dynamic>> candidates,
+  }) async {
+    if (candidates.isEmpty) return null;
+    if (candidates.length == 1) return candidates.first['videoId'] as String?;
+
+    final lines = <String>[];
+    for (var i = 0; i < candidates.length; i++) {
+      final c = candidates[i];
+      final dur = c['durationSeconds'];
+      final durStr = dur is int
+          ? '${(dur ~/ 60).toString().padLeft(2, '0')}:${(dur % 60).toString().padLeft(2, '0')}'
+          : 'unknown';
+      lines.add(
+        '${i + 1}. id=${c['videoId']} | "${c['title']}" | channel: ${c['channel']} | duration: $durStr',
+      );
+    }
+
+    const systemPrompt =
+        'You pick the YouTube video that best matches a requested song for AUDIO-ONLY listening in a radio app. '
+        'You output ONLY valid JSON in the requested format.';
+
+    final userPrompt = '''
+Requested song: "$title" by $artist
+
+Pick the BEST YouTube video for audio playback from these candidates:
+${lines.join('\n')}
+
+Selection rules — apply STRICTLY in this order. Do NOT pick a lower-tier
+option when a higher-tier one is present.
+
+Tier 1 (BEST — pick from here if any candidate qualifies):
+  - "<Artist> - Topic" auto-generated channel uploads.
+  - Titles explicitly labelled "(Audio)", "(Official Audio)", "[Audio]",
+    "(Visualizer)", or similar — these are audio-only with no intro/outro
+    and no music-video sound design (gunshots, dialogue, sound effects).
+  - Lyric videos / "(Lyrics)" / "(Official Lyric Video)" titles.
+
+Tier 2 (acceptable fallback ONLY if no Tier 1 exists):
+  - "Official Music Video" / "Official Video" uploads from the verified
+    artist channel. Note: music videos often contain alternate edits,
+    intro chatter, or sound effects that bleed into a radio mix — only
+    pick these if Tier 1 is empty.
+
+Tier 3 (last resort):
+  - Any other upload that is unambiguously the requested studio recording.
+
+Always REJECT (never pick from these, even if it means choosing a
+lower-tier alternative):
+  - Covers, remixes, parodies, mashups, reactions, tutorials.
+  - Sped-up / slowed / nightcore / 8D / bass-boosted edits.
+  - Live performances (unless the original recording is itself live).
+  - Videos under ~2 minutes or over ~10 minutes (unless the song
+    genuinely is that long) — these are clips, intros, or full albums.
+  - YouTube Shorts and reaction/review/commentary channels.
+
+Tie-breakers within a tier: prefer the candidate whose duration is
+closest to the song's known length, then prefer the verified artist
+channel over third-party uploads.
+
+Respond with JSON exactly: {"videoId": "<the chosen id>", "reason": "<brief reason citing the tier>"}
+If no candidate is acceptable, respond with: {"videoId": null, "reason": "<why>"}
+''';
+
+    final body = _baseBody(
+      systemPrompt: systemPrompt,
+      userPrompt: userPrompt,
+      model: 'openai/gpt-oss-20b:nitro',
+      temperature: 0.2,
+      // Reasoning models need plenty of headroom — even at low effort the
+      // model will spend tokens "thinking" before emitting JSON. A tight
+      // cap caused Groq upstream to truncate before any `content` was
+      // produced and fail JSON validation.
+      maxTokens: 2000,
+      reasoning: const {'effort': 'low'},
+    );
+
+    try {
+      final content =
+          await _chat(tag: 'pickBestYoutubeVideo("$title" by $artist)', body: body);
+      final parsed = jsonDecode(content);
+      if (parsed is Map && parsed['videoId'] is String) {
+        final chosen = parsed['videoId'] as String;
+        // Validate the LLM didn't hallucinate an id.
+        final ok = candidates.any((c) => c['videoId'] == chosen);
+        if (ok) return chosen;
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('pickBestYoutubeVideo error: $e');
+    }
+    return candidates.first['videoId'] as String?;
   }
 
   void dispose() {

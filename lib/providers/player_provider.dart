@@ -13,6 +13,16 @@ class PlayerProvider extends ChangeNotifier {
   RadioStation? _currentStation;
   Song? _currentSong;
 
+  /// Bumped on every user-visible song change so in-flight resolves/loads
+  /// from a previous song are ignored if the user skipped past them.
+  int _playRequestId = 0;
+
+  /// True while a song's audio is still being prepared (URL resolved /
+  /// AVPlayer loading). The Now Playing UI uses this to render a "loading
+  /// duration" placeholder so skips feel snappy — the title/artist update
+  /// instantly even though the stream isn't ready yet.
+  bool _isPreparing = false;
+
   PlayerProvider({required this.audioHandler, required this.engine}) {
     audioHandler.onNearEnd = _handleNearEnd;
     audioHandler.onTrackComplete = _handleTrackComplete;
@@ -21,28 +31,72 @@ class PlayerProvider extends ChangeNotifier {
 
   RadioStation? get currentStation => _currentStation;
   Song? get currentSong => _currentSong;
+  bool get isPreparing => _isPreparing;
+
+  /// Pick the next unplayed song to play. Prefers ones with a ready
+  /// streamUrl, then ones with a videoId we can refresh, then any unplayed
+  /// song (which we'll resolve from scratch). Does NOT mutate state.
+  Song? _pickNext(RadioStation station) {
+    Song? withStream;
+    Song? withVideoId;
+    Song? anyUnplayed;
+    for (final s in station.queue) {
+      if (s.played) continue;
+      anyUnplayed ??= s;
+      if (s.youtubeVideoId != null) withVideoId ??= s;
+      if (s.streamUrl != null) {
+        withStream = s;
+        break;
+      }
+    }
+    return withStream ?? withVideoId ?? anyUnplayed;
+  }
 
   Future<void> playStation(RadioStation station) async {
     _currentStation = station;
-    // Find first unplayed song (may need stream URL refresh).
-    Song? next = station.firstPlayable ?? station.firstResolvableUnplayed;
-    if (next == null) return;
-    if (next.streamUrl == null) {
-      final ok = await engine.ensureSongResolved(next);
+    final next = _pickNext(station);
+    if (next == null) {
+      _currentSong = null;
+      notifyListeners();
+      return;
+    }
+    await _playSongSnappy(station, next);
+  }
+
+  /// Show the song in the UI immediately, then resolve + load audio in the
+  /// background. If the user skips again before audio loads, the in-flight
+  /// load is abandoned via _playRequestId.
+  Future<void> _playSongSnappy(RadioStation station, Song song) async {
+    final requestId = ++_playRequestId;
+    _currentStation = station;
+    _currentSong = song;
+    _isPreparing = true;
+    notifyListeners();
+
+    if (song.streamUrl == null) {
+      final ok = await engine.ensureSongResolved(song);
+      if (requestId != _playRequestId) return; // user skipped, abandon
       if (!ok) {
-        // Skip this one and try the next resolvable.
-        next.played = true;
-        next = station.firstResolvableUnplayed;
-        if (next == null) return;
-        if (next.streamUrl == null) {
-          await engine.ensureSongResolved(next);
-        }
+        song.played = true;
+        // Try the next candidate.
+        await _advanceToNext();
+        return;
       }
     }
-    if (next.streamUrl == null) return;
-    _currentSong = next;
+
+    if (requestId != _playRequestId) return;
+    try {
+      await audioHandler.playSong(song, stationName: station.name);
+    } catch (e) {
+      debugPrint('Audio load failed for "${song.title}": $e');
+      if (requestId != _playRequestId) return;
+      song.played = true;
+      await _advanceToNext();
+      return;
+    }
+    if (requestId != _playRequestId) return;
+    _isPreparing = false;
     notifyListeners();
-    await audioHandler.playSong(next, stationName: station.name);
     _maybeReplenish();
   }
 
@@ -54,39 +108,21 @@ class PlayerProvider extends ChangeNotifier {
       engine.markPlayed(station, _currentSong!);
     }
 
-    Song? next = station.firstPlayable;
-    // If next isn't resolved yet but exists, try to resolve.
+    Song? next = _pickNext(station);
     if (next == null) {
-      // Find first unplayed pending song and resolve it.
-      for (final s in station.queue) {
-        if (!s.played && s.streamUrl == null) {
-          final ok = await engine.ensureSongResolved(s);
-          if (ok) {
-            next = s;
-            break;
-          } else {
-            s.played = true; // mark failed as played to skip past
-          }
-        }
-      }
-    }
-
-    if (next == null) {
-      // Nothing playable yet — try to replenish.
+      // Nothing in queue at all — replenish synchronously then try again.
       await engine.replenish(station);
-      next = station.firstPlayable;
+      next = _pickNext(station);
     }
 
     if (next == null) {
       _currentSong = null;
+      _isPreparing = false;
       notifyListeners();
       return;
     }
 
-    _currentSong = next;
-    notifyListeners();
-    await audioHandler.playSong(next, stationName: station.name);
-    _maybeReplenish();
+    await _playSongSnappy(station, next);
   }
 
   Future<void> _handleNearEnd() async {
@@ -107,7 +143,10 @@ class PlayerProvider extends ChangeNotifier {
 
   Future<void> skipCurrent() async {
     final s = _currentSong;
-    if (s != null) s.rating = SongRating.skip;
+    // Only mark as a "skip" if the user hasn't already given the song an
+    // explicit rating (e.g. thumbs up) — a thumbs-up + skip should keep the
+    // upvote so the LLM still treats this song as a positive signal.
+    if (s != null && s.rating == null) s.rating = SongRating.skip;
     await _advanceToNext();
   }
 

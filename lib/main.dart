@@ -46,7 +46,7 @@ Future<void> main() async {
   await tasteProvider.load();
 
   final llm = LlmService();
-  final yt = YoutubeService();
+  final yt = YoutubeService(llm: llm);
   final storage = StationStorage();
   final engine = StationEngine(
     llm: llm,

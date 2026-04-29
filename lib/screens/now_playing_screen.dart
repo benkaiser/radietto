@@ -32,40 +32,51 @@ class NowPlayingScreen extends StatelessWidget {
       body: song == null || station == null
           ? const Center(child: Text('Nothing playing'))
           : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 16),
-                    Text(station.emoji, style: const TextStyle(fontSize: 140)),
-                    const SizedBox(height: 8),
-                    Text(
-                      station.tagline,
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(fontStyle: FontStyle.italic),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 32),
-                    Text(
-                      song.title,
-                      style: theme.textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      song.artist,
-                      style: theme.textTheme.titleMedium,
-                      textAlign: TextAlign.center,
-                    ),
-                    const Spacer(),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints:
+                          BoxConstraints(minHeight: constraints.maxHeight),
+                      child: IntrinsicHeight(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            children: [
+                              const SizedBox(height: 16),
+                              Text(station.emoji,
+                                  style: const TextStyle(fontSize: 140)),
+                              const SizedBox(height: 8),
+                              Text(
+                                station.tagline,
+                                style: theme.textTheme.bodyMedium
+                                    ?.copyWith(fontStyle: FontStyle.italic),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 32),
+                              Text(
+                                song.title,
+                                style: theme.textTheme.headlineSmall
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                song.artist,
+                                style: theme.textTheme.titleMedium,
+                                textAlign: TextAlign.center,
+                              ),
+                              const Spacer(),
                     StreamBuilder<Duration>(
                       stream: player.audioHandler.player.positionStream,
                       builder: (context, snap) {
+                        final preparing = player.isPreparing;
                         final pos = snap.data ?? Duration.zero;
-                        final dur = player.audioHandler.player.duration ??
-                            song.duration ??
-                            Duration.zero;
+                        final dur = preparing
+                            ? Duration.zero
+                            : (player.audioHandler.player.duration ??
+                                song.duration ??
+                                Duration.zero);
                         final maxV = dur.inSeconds.toDouble().clamp(1.0, double.infinity);
                         final cur = pos.inSeconds.toDouble().clamp(0.0, maxV);
                         return Column(
@@ -74,8 +85,10 @@ class NowPlayingScreen extends StatelessWidget {
                               value: cur,
                               min: 0,
                               max: maxV.toDouble(),
-                              onChanged: (v) => player.audioHandler
-                                  .seek(Duration(seconds: v.toInt())),
+                              onChanged: preparing
+                                  ? null
+                                  : (v) => player.audioHandler
+                                      .seek(Duration(seconds: v.toInt())),
                             ),
                             Padding(
                               padding:
@@ -84,8 +97,8 @@ class NowPlayingScreen extends StatelessWidget {
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Text(_format(pos)),
-                                  Text(_format(dur)),
+                                  Text(preparing ? '--:--' : _format(pos)),
+                                  Text(preparing ? '--:--' : _format(dur)),
                                 ],
                               ),
                             ),
@@ -143,6 +156,11 @@ class NowPlayingScreen extends StatelessWidget {
                     const SizedBox(height: 16),
                   ],
                 ),
+              ),
+            ),
+          ),
+        );
+                },
               ),
             ),
     );

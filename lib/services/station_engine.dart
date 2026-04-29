@@ -177,6 +177,46 @@ class StationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Wipe ALL listening state — every station is removed (including custom
+  /// ones) and persistence is cleared. Templates are then re-seeded and
+  /// warmed up afresh. Used by the Settings "reset listening history" flow.
+  Future<void> resetAll() async {
+    _saveDebounce?.cancel();
+    _stations.clear();
+    await _storage.clear();
+    notifyListeners();
+    await initializeDefaults();
+  }
+
+  /// Drop every unplayed song from every station's queue and re-warm them
+  /// in display order (top-down) so refilled queues appear naturally rather
+  /// than at random times. Called when the user changes their tastes —
+  /// existing pre-generated queues no longer reflect the new preferences.
+  /// The currently playing track (held by the audio handler) keeps playing;
+  /// once it ends the next track will come from the freshly-generated queue.
+  Future<void> regenerateAllStations() async {
+    for (final station in _stations) {
+      station.queue.removeWhere((s) => !s.played);
+      station.isWarmedUp = false;
+    }
+    _scheduleSave();
+    notifyListeners();
+
+    // Snapshot the order at call time — _stations is mutable.
+    final ordered = List<RadioStation>.from(_stations);
+    for (final station in ordered) {
+      // Wait for any in-flight generation (with old tastes) to finish, then
+      // drop those stale songs before warming up afresh.
+      while (station.isGenerating) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      station.queue.removeWhere((s) => !s.played);
+      station.isWarmedUp = false;
+      notifyListeners();
+      await _warmUpStation(station);
+    }
+  }
+
   void notifyChange() {
     _scheduleSave();
     notifyListeners();

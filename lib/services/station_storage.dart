@@ -26,4 +26,9 @@ class StationStorage {
     final raw = jsonEncode(stations.map((s) => s.toJson()).toList());
     await prefs.setString(_kKey, raw);
   }
+
+  Future<void> clear() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kKey);
+  }
 }

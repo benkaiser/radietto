@@ -6,6 +6,7 @@ import '../providers/player_provider.dart';
 import '../services/station_engine.dart';
 import '../widgets/mini_player.dart';
 import 'taste_onboarding_screen.dart';
+import 'settings_screen.dart';
 
 class RadioBrowserScreen extends StatefulWidget {
   const RadioBrowserScreen({super.key});
@@ -122,6 +123,15 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
                   builder: (_) =>
                       const TasteOnboardingScreen(isReturningEdit: true),
                 ),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
               );
             },
           ),

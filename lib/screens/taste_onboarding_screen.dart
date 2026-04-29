@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/taste_provider.dart';
+import '../services/station_engine.dart';
 import 'radio_browser_screen.dart';
 
 class TasteOnboardingScreen extends StatelessWidget {
@@ -10,6 +13,7 @@ class TasteOnboardingScreen extends StatelessWidget {
 
   Future<void> _save(BuildContext context, {required bool useDefaults}) async {
     final taste = context.read<TasteProvider>();
+    final engine = context.read<StationEngine>();
     if (useDefaults) {
       // Reset to defaults if skipping.
       for (final p in taste.tastes) {
@@ -17,6 +21,14 @@ class TasteOnboardingScreen extends StatelessWidget {
       }
     }
     await taste.save(markOnboardingDone: true);
+    // Tastes drive the LLM song-generation prompt, so any pre-generated
+    // unplayed queue is stale. Drop it and re-warm with the new tastes.
+    // Only meaningful on the returning-edit path; on first-time onboarding
+    // the engine hasn't generated anything yet but the call is a no-op.
+    if (isReturningEdit) {
+      // Fire-and-forget — warmup happens in the background.
+      unawaited(engine.regenerateAllStations());
+    }
     if (!context.mounted) return;
     if (isReturningEdit) {
       Navigator.of(context).pop();
