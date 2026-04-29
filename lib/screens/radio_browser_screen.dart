@@ -175,7 +175,7 @@ class _StationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final ready = station.isWarmedUp && station.firstResolvableUnplayed != null;
+    final ready = station.isWarmedUp && station.firstUnplayed != null;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
