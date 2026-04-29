@@ -74,8 +74,8 @@ class NowPlayingScreen extends StatelessWidget {
                         final pos = snap.data ?? Duration.zero;
                         final dur = preparing
                             ? Duration.zero
-                            : (player.audioHandler.player.duration ??
-                                song.duration ??
+                            : (song.duration ??
+                                player.audioHandler.player.duration ??
                                 Duration.zero);
                         final maxV = dur.inSeconds.toDouble().clamp(1.0, double.infinity);
                         final cur = pos.inSeconds.toDouble().clamp(0.0, maxV);

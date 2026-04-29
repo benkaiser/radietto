@@ -62,7 +62,18 @@ class RadiettoAudioHandler extends BaseAudioHandler with SeekHandler {
     );
     this.mediaItem.add(mediaItem);
     await _player.setUrl(song.streamUrl!);
-    await _player.play();
+    // YouTube's androidVr client sometimes returns MP4 audio whose
+    // container duration is ~2× the real track length (extra silent
+    // padding). Clip playback to the duration we got from YouTube
+    // search metadata so just_audio reports the correct length and
+    // fires processingState.completed at the right moment.
+    if (song.duration != null && song.duration! > Duration.zero) {
+      await _player.setClip(end: song.duration);
+    }
+    // IMPORTANT: do NOT `await _player.play()` — its future doesn't
+    // complete until playback is paused/stopped/ends, which would block
+    // the caller (and leave PlayerProvider.isPreparing=true forever).
+    unawaited(_player.play());
   }
 
   @override

@@ -49,71 +49,86 @@ class YoutubeService {
     });
   }
 
-  /// Resolve a single Song's YouTube videoId, streamUrl, and metadata.
-  /// If [song.youtubeVideoId] is already known, only the manifest is fetched
-  /// (1 rate-limited call). Otherwise we search first then fetch the manifest
-  /// (2 rate-limited calls). Mutates the [song] in place.
-  /// Returns true on success, false on failure.
-  Future<bool> resolveSong(Song song) async {
-    if (song.streamUrl != null) return true;
+  /// Phase 1: search YouTube + LLM-pick the best video for this song.
+  /// Sets [song.youtubeVideoId], [song.thumbnailUrl], [song.duration].
+  /// Does NOT fetch the stream manifest (that's [resolveStreamUrl]).
+  /// Returns true on success, false on failure. Mutates [song] in place.
+  Future<bool> resolveVideoId(Song song) async {
+    if (song.youtubeVideoId != null) return true;
     song.status = SongResolutionStatus.resolving;
 
     final yt = YoutubeExplode();
     try {
-      VideoId videoId;
-      if (song.youtubeVideoId != null) {
-        videoId = VideoId(song.youtubeVideoId!);
-      } else {
-        // Rate-limited: search.
-        await _waitForSlot();
-        final query = '${song.artist} ${song.title}';
-        final results = await yt.search.search(query);
-        if (results.isEmpty) {
-          song.status = SongResolutionStatus.failed;
-          return false;
-        }
-
-        final topResults = results.take(_candidateCount).toList();
-        Video chosen = topResults.first;
-
-        if (_llm != null && topResults.length > 1) {
-          final candidates = topResults
-              .map((v) => {
-                    'videoId': v.id.value,
-                    'title': v.title,
-                    'channel': v.author,
-                    'durationSeconds': v.duration?.inSeconds,
-                  })
-              .toList();
-          try {
-            final pickedId = await _llm.pickBestYoutubeVideo(
-              title: song.title,
-              artist: song.artist,
-              candidates: candidates,
-            );
-            if (pickedId != null) {
-              chosen = topResults.firstWhere(
-                (v) => v.id.value == pickedId,
-                orElse: () => topResults.first,
-              );
-            }
-          } catch (e) {
-            debugPrint(
-              'LLM video pick failed for "${song.title}" — ${song.artist}: $e',
-            );
-          }
-        }
-
-        videoId = chosen.id;
-        song.youtubeVideoId = videoId.value;
-        song.thumbnailUrl = chosen.thumbnails.highResUrl;
-        song.duration = chosen.duration;
+      // Rate-limited: search.
+      await _waitForSlot();
+      final query = '${song.artist} ${song.title}';
+      final results = await yt.search.search(query);
+      if (results.isEmpty) {
+        song.status = SongResolutionStatus.failed;
+        return false;
       }
 
-      // Rate-limited: stream manifest.
+      final topResults = results.take(_candidateCount).toList();
+      Video chosen = topResults.first;
+
+      if (_llm != null && topResults.length > 1) {
+        final candidates = topResults
+            .map((v) => {
+                  'videoId': v.id.value,
+                  'title': v.title,
+                  'channel': v.author,
+                  'durationSeconds': v.duration?.inSeconds,
+                })
+            .toList();
+        try {
+          final pickedId = await _llm.pickBestYoutubeVideo(
+            title: song.title,
+            artist: song.artist,
+            candidates: candidates,
+          );
+          if (pickedId != null) {
+            chosen = topResults.firstWhere(
+              (v) => v.id.value == pickedId,
+              orElse: () => topResults.first,
+            );
+          }
+        } catch (e) {
+          debugPrint(
+            'LLM video pick failed for "${song.title}" — ${song.artist}: $e',
+          );
+        }
+      }
+
+      song.youtubeVideoId = chosen.id.value;
+      song.thumbnailUrl = chosen.thumbnails.highResUrl;
+      song.duration = chosen.duration;
+      // Mark as resolved (= playable) once we have a videoId — the
+      // stream URL is fetched lazily on demand.
+      song.status = SongResolutionStatus.resolved;
+      return true;
+    } catch (e) {
+      song.status = SongResolutionStatus.failed;
+      return false;
+    } finally {
+      yt.close();
+    }
+  }
+
+  /// Phase 2: fetch the audio stream manifest for an already-resolved
+  /// videoId. Sets [song.streamUrl]. Returns true on success.
+  /// If [song.youtubeVideoId] is null, this calls [resolveVideoId] first.
+  Future<bool> resolveStreamUrl(Song song) async {
+    if (song.streamUrl != null) return true;
+    if (song.youtubeVideoId == null) {
+      final ok = await resolveVideoId(song);
+      if (!ok) return false;
+    }
+
+    final yt = YoutubeExplode();
+    try {
       await _waitForSlot();
       final manifest = await yt.videos.streamsClient.getManifest(
-        videoId,
+        VideoId(song.youtubeVideoId!),
         ytClients: [YoutubeApiClient.androidVr],
       );
       final audioStreams = manifest.audioOnly.toList();
@@ -124,15 +139,24 @@ class YoutubeService {
           .toList();
       final candidates = mp4Streams.isNotEmpty ? mp4Streams : audioStreams;
       candidates.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      final audio = candidates.first;
-      song.streamUrl = audio.url.toString();
-      song.status = SongResolutionStatus.resolved;
+      song.streamUrl = candidates.first.url.toString();
       return true;
     } catch (e) {
-      song.status = SongResolutionStatus.failed;
+      debugPrint('resolveStreamUrl failed for "${song.title}": $e');
       return false;
     } finally {
       yt.close();
     }
+  }
+
+  /// Convenience: ensures both videoId and streamUrl are populated.
+  /// Used by the player when it needs to play right now.
+  Future<bool> resolveSong(Song song) async {
+    if (song.streamUrl != null) return true;
+    if (song.youtubeVideoId == null) {
+      final ok = await resolveVideoId(song);
+      if (!ok) return false;
+    }
+    return resolveStreamUrl(song);
   }
 }

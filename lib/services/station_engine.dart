@@ -68,13 +68,16 @@ class StationEngine extends ChangeNotifier {
 
     notifyListeners();
 
-    // Only warm up stations that don't already have a usable queue.
+    // Only warm up stations that don't already have any unplayed songs in
+    // their queue. videoIds and stream URLs are resolved just-in-time.
     for (final station in _stations) {
-      final hasUnplayedWithVideo =
-          station.queue.any((s) => !s.played && s.youtubeVideoId != null);
-      if (!hasUnplayedWithVideo) {
+      final hasUnplayedSong = station.queue.any((s) => !s.played);
+      if (!hasUnplayedSong) {
         // Don't await — let stations warm in parallel.
         _warmUpStation(station);
+      } else {
+        // Persisted queues already have songs — they're warm.
+        station.isWarmedUp = true;
       }
     }
   }
@@ -110,17 +113,12 @@ class StationEngine extends ChangeNotifier {
         count: 5,
       );
       station.queue.addAll(songs);
+      // Station is "warm" as soon as the LLM has produced song candidates.
+      // YouTube videoId search and stream URL resolution are deferred
+      // until just-in-time (the player drives them).
+      station.isWarmedUp = true;
       _scheduleSave();
       notifyListeners();
-
-      for (final song in songs) {
-        final ok = await _youtube.resolveSong(song);
-        if (ok && !station.isWarmedUp) {
-          station.isWarmedUp = true;
-        }
-        _scheduleSave();
-        notifyListeners();
-      }
     } catch (e) {
       debugPrint('Failed to warm up station ${station.name}: $e');
     } finally {
@@ -145,11 +143,8 @@ class StationEngine extends ChangeNotifier {
       station.queue.addAll(songs);
       _scheduleSave();
       notifyListeners();
-      for (final song in songs) {
-        await _youtube.resolveSong(song);
-        _scheduleSave();
-        notifyListeners();
-      }
+      // YouTube resolution is deferred — happens just-in-time when the
+      // player needs the song.
     } catch (e) {
       debugPrint('Failed to replenish ${station.name}: $e');
     } finally {
@@ -158,11 +153,30 @@ class StationEngine extends ChangeNotifier {
     }
   }
 
-  /// Resolve a specific song's YouTube stream (used for lazy prefetch and
-  /// for refreshing expired stream URLs at play time).
+  /// Resolve a specific song fully (videoId + streamUrl). Used by the player
+  /// when it needs to start playback right now.
   Future<bool> ensureSongResolved(Song song) async {
     if (song.streamUrl != null) return true;
     final ok = await _youtube.resolveSong(song);
+    notifyListeners();
+    return ok;
+  }
+
+  /// Resolve only the YouTube videoId for [song] (search + LLM pick) — does
+  /// not fetch the stream URL. Cheap enough to do speculatively for the
+  /// next track in the queue while the current one plays.
+  Future<bool> ensureVideoIdResolved(Song song) async {
+    if (song.youtubeVideoId != null) return true;
+    final ok = await _youtube.resolveVideoId(song);
+    notifyListeners();
+    return ok;
+  }
+
+  /// Resolve only the stream URL for [song] (assumes videoId already set).
+  /// Used for lazy prefetch ~20s before the current song ends.
+  Future<bool> ensureStreamUrlResolved(Song song) async {
+    if (song.streamUrl != null) return true;
+    final ok = await _youtube.resolveStreamUrl(song);
     notifyListeners();
     return ok;
   }

@@ -100,6 +100,16 @@ class LlmService {
       throw Exception('LLM call "$tag" returned no choices: ${response.body}');
     }
     final choice = choices.first as Map;
+    // Catch silent truncation early — without this, callers get cryptic
+    // "Unterminated string" JSON parse errors instead of a clear cause.
+    final finishReason = choice['finish_reason'];
+    if (finishReason == 'length') {
+      throw Exception(
+        'LLM call "$tag" hit max_tokens (finish_reason=length). '
+        'The reasoning trace likely consumed the budget — increase '
+        'maxTokens or lower reasoning effort.',
+      );
+    }
     // OpenRouter sometimes returns 200 OK while the upstream provider
     // (Groq, etc.) failed — the failure shows up inside the choice.
     final upstreamError = choice['error'];
@@ -220,7 +230,15 @@ Respond with JSON in this exact shape:
 Choose real, well-known songs that exist on YouTube. Do not invent songs.
 ''';
 
-    final body = _baseBody(systemPrompt: systemPrompt, userPrompt: userPrompt);
+    final body = _baseBody(
+      systemPrompt: systemPrompt,
+      userPrompt: userPrompt,
+      // gpt-oss models burn a lot of tokens on internal reasoning even at
+      // 'low'; without a generous cap, finish_reason=length truncates the
+      // JSON content mid-string. 4000 leaves plenty of headroom.
+      maxTokens: 4000,
+      reasoning: const {'effort': 'low'},
+    );
     final content = await _chat(tag: 'generateSongs', body: body);
     final dynamic parsed = jsonDecode(content);
 
@@ -283,6 +301,8 @@ Also write a one-sentence "moodPrompt" describing the vibe of music for this sta
 Respond with JSON:
 {"name": "...", "tagline": "...", "emoji": "🎧", "moodPrompt": "..."}
 ''',
+      maxTokens: 2000,
+      reasoning: const {'effort': 'low'},
     );
 
     final content = await _chat(tag: 'generateStation', body: body);

@@ -48,6 +48,15 @@ class RadioStation {
     return null;
   }
 
+  /// First unplayed song in the queue, regardless of resolution state.
+  /// Used by the player to drive just-in-time YouTube resolution.
+  Song? get firstUnplayed {
+    for (final s in queue) {
+      if (!s.played) return s;
+    }
+    return null;
+  }
+
   int get unplayedCount => queue.where((s) => !s.played).length;
 
   Map<String, dynamic> toJson() => {
@@ -78,9 +87,9 @@ class RadioStation {
       queue: queue,
       history: history,
     );
-    // Station is warm if any unplayed song has a videoId.
-    station.isWarmedUp =
-        queue.any((s) => !s.played && s.youtubeVideoId != null);
+    // Station is warm if there's any unplayed song queued — videoIds
+    // and stream URLs are resolved just-in-time on playback.
+    station.isWarmedUp = queue.any((s) => !s.played);
     return station;
   }
 }

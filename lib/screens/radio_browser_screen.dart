@@ -30,7 +30,7 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
   }
 
   Future<void> _onTapStation(RadioStation station) async {
-    if (!station.isWarmedUp || station.firstResolvableUnplayed == null) {
+    if (!station.isWarmedUp || station.firstUnplayed == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           duration: Duration(seconds: 2),

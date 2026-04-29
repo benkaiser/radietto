@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/radio_station.dart';
@@ -98,6 +100,25 @@ class PlayerProvider extends ChangeNotifier {
     _isPreparing = false;
     notifyListeners();
     _maybeReplenish();
+    // Speculative: while this song plays, resolve the videoId for the
+    // next unplayed song so that when we hit near-end (or the user
+    // skips) we only have the cheap streamUrl manifest fetch left.
+    _prefetchNextVideoId();
+  }
+
+  /// Find the next unplayed song after [_currentSong] and resolve its
+  /// videoId in the background (no stream URL fetch yet).
+  void _prefetchNextVideoId() {
+    final station = _currentStation;
+    if (station == null) return;
+    for (final s in station.queue) {
+      if (!s.played && s != _currentSong) {
+        if (s.youtubeVideoId == null) {
+          unawaited(engine.ensureVideoIdResolved(s));
+        }
+        return;
+      }
+    }
   }
 
   Future<void> _advanceToNext() async {
@@ -126,11 +147,14 @@ class PlayerProvider extends ChangeNotifier {
   }
 
   Future<void> _handleNearEnd() async {
-    // Lazily resolve the next song's stream if it isn't ready.
+    // ~20s before the current track ends, resolve the stream URL for the
+    // next unplayed song. The videoId should already be resolved from
+    // _prefetchNextVideoId() that ran when the current song started.
     final station = _currentStation;
     if (station == null) return;
     for (final s in station.queue) {
       if (!s.played && s != _currentSong && s.streamUrl == null) {
+        // ensureSongResolved handles both videoId + streamUrl if needed.
         await engine.ensureSongResolved(s);
         break;
       }
