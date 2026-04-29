@@ -116,6 +116,7 @@ class YoutubeService {
       song.status = SongResolutionStatus.resolved;
       return true;
     } catch (e) {
+      debugPrint('resolveVideoId failed for "${song.title}": $e');
       song.status = SongResolutionStatus.failed;
       return false;
     } finally {
@@ -133,25 +134,49 @@ class YoutubeService {
       if (!ok) return false;
     }
 
+    // YouTube periodically breaks individual ytClients (signature changes,
+    // ratelimits, region blocks). Try a chain of clients before giving up.
+    const clients = [
+      YoutubeApiClient.androidVr,
+      YoutubeApiClient.tv,
+      YoutubeApiClient.mweb,
+      YoutubeApiClient.androidMusic,
+    ];
     final yt = YoutubeExplode();
     try {
-      await _waitForSlot();
-      final manifest = await yt.videos.streamsClient.getManifest(
-        VideoId(song.youtubeVideoId!),
-        ytClients: [YoutubeApiClient.androidVr],
+      Object? lastError;
+      for (final client in clients) {
+        try {
+          await _waitForSlot();
+          final manifest = await yt.videos.streamsClient.getManifest(
+            VideoId(song.youtubeVideoId!),
+            ytClients: [client],
+          );
+          final audioStreams = manifest.audioOnly.toList();
+          if (audioStreams.isEmpty) {
+            lastError = StateError('no audio streams from $client');
+            continue;
+          }
+          // macOS/iOS AVFoundation cannot play WebM/Opus — restrict to
+          // MP4/AAC (m4a) when available, falling back to the highest
+          // bitrate otherwise.
+          final mp4Streams = audioStreams
+              .where((s) => s.container.name.toLowerCase() == 'mp4')
+              .toList();
+          final candidates = mp4Streams.isNotEmpty ? mp4Streams : audioStreams;
+          candidates.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+          song.streamUrl = candidates.first.url.toString();
+          return true;
+        } catch (e) {
+          lastError = e;
+          debugPrint(
+            'ytClient $client failed for "${song.title}": $e — trying next client',
+          );
+        }
+      }
+      debugPrint(
+        'resolveStreamUrl exhausted all clients for "${song.title}": $lastError',
       );
-      final audioStreams = manifest.audioOnly.toList();
-      // macOS/iOS AVFoundation cannot play WebM/Opus — restrict to MP4/AAC
-      // (m4a) when available, falling back to the highest bitrate otherwise.
-      final mp4Streams = audioStreams
-          .where((s) => s.container.name.toLowerCase() == 'mp4')
-          .toList();
-      final candidates = mp4Streams.isNotEmpty ? mp4Streams : audioStreams;
-      candidates.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      song.streamUrl = candidates.first.url.toString();
-      return true;
-    } catch (e) {
-      debugPrint('resolveStreamUrl failed for "${song.title}": $e');
       return false;
     } finally {
       yt.close();
