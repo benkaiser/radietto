@@ -138,9 +138,10 @@ class PlayerProvider extends ChangeNotifier {
       final ok = await engine.ensureSongResolved(song);
       if (requestId != _playRequestId) return; // user skipped, abandon
       if (!ok) {
-        song.played = true;
-        // Try the next candidate.
-        await _advanceToNext();
+        // Couldn't find a YouTube video for this song (likely hallucinated
+        // by the LLM or just not on YouTube). Drop it from the queue
+        // without adding to history and try the next pick.
+        await _discardAndAdvance(song);
         return;
       }
     }
@@ -151,8 +152,7 @@ class PlayerProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('Audio load failed for "${song.title}": $e');
       if (requestId != _playRequestId) return;
-      song.played = true;
-      await _advanceToNext();
+      await _discardAndAdvance(song);
       return;
     }
     if (requestId != _playRequestId) return;
@@ -218,6 +218,28 @@ class PlayerProvider extends ChangeNotifier {
       return;
     }
 
+    await _playSongSnappy(station, next);
+  }
+
+  /// Discard [failed] (remove from queue, do NOT add to history) and play
+  /// the next pickable song. Used when we can't resolve a YouTube video
+  /// for an LLM-generated track or the audio fails to load at all.
+  Future<void> _discardAndAdvance(Song failed) async {
+    final station = _currentStation;
+    if (station == null) return;
+    engine.discardSong(station, failed);
+    if (_currentSong == failed) _currentSong = null;
+
+    Song? next = _pickNext(station);
+    if (next == null) {
+      await engine.replenish(station);
+      next = _pickNext(station);
+    }
+    if (next == null) {
+      _isPreparing = false;
+      notifyListeners();
+      return;
+    }
     await _playSongSnappy(station, next);
   }
 

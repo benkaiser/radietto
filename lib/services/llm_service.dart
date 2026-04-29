@@ -429,15 +429,27 @@ If no candidate is acceptable, respond with: {"videoId": null, "reason": "<why>"
       final content =
           await _chat(tag: 'pickBestYoutubeVideo("$title" by $artist)', body: body);
       final parsed = jsonDecode(content);
-      if (parsed is Map && parsed['videoId'] is String) {
-        final chosen = parsed['videoId'] as String;
-        // Validate the LLM didn't hallucinate an id.
-        final ok = candidates.any((c) => c['videoId'] == chosen);
-        if (ok) return chosen;
+      if (parsed is Map) {
+        // The LLM may explicitly reject every candidate (e.g. the song
+        // doesn't appear to exist on YouTube, or the artist is wrong).
+        // Distinguish that from a malformed/missing response: an
+        // intentional null means "skip this song entirely" — return
+        // null here and let the caller treat it as a hard failure.
+        if (parsed.containsKey('videoId') && parsed['videoId'] == null) {
+          return null;
+        }
+        if (parsed['videoId'] is String) {
+          final chosen = parsed['videoId'] as String;
+          // Validate the LLM didn't hallucinate an id.
+          final ok = candidates.any((c) => c['videoId'] == chosen);
+          if (ok) return chosen;
+        }
       }
     } catch (e) {
       if (kDebugMode) debugPrint('pickBestYoutubeVideo error: $e');
     }
+    // Network/parse failure (NOT an explicit null) — fall back to the
+    // first candidate so a transient LLM blip doesn't break playback.
     return candidates.first['videoId'] as String?;
   }
 

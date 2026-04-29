@@ -191,6 +191,20 @@ class StationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Drop a song from the queue without ever adding it to history.
+  /// Used when we couldn't resolve a playable YouTube video for it
+  /// (the LLM hallucinated, or the song just isn't on YouTube) — we
+  /// don't want phantom tracks polluting the listener's history.
+  void discardSong(RadioStation station, Song song) {
+    station.queue.remove(song);
+    if (station.lastPlayedSongId == song.id) {
+      station.lastPlayedSongId = null;
+      station.lastPlayedPositionMs = null;
+    }
+    _scheduleSave();
+    notifyListeners();
+  }
+
   /// Wipe ALL listening state — every station is removed (including custom
   /// ones) and persistence is cleared. Templates are then re-seeded and
   /// warmed up afresh. Used by the Settings "reset listening history" flow.

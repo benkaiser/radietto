@@ -86,12 +86,21 @@ class YoutubeService {
             artist: song.artist,
             candidates: candidates,
           );
-          if (pickedId != null) {
-            chosen = topResults.firstWhere(
-              (v) => v.id.value == pickedId,
-              orElse: () => topResults.first,
+          if (pickedId == null) {
+            // The LLM looked at every candidate and decided none of them
+            // are actually the requested song (likely a hallucinated /
+            // non-existent track from generateSongs). Hard-fail so the
+            // caller can drop the song and move on.
+            debugPrint(
+              'LLM rejected all candidates for "${song.title}" — ${song.artist}',
             );
+            song.status = SongResolutionStatus.failed;
+            return false;
           }
+          chosen = topResults.firstWhere(
+            (v) => v.id.value == pickedId,
+            orElse: () => topResults.first,
+          );
         } catch (e) {
           debugPrint(
             'LLM video pick failed for "${song.title}" — ${song.artist}: $e',
