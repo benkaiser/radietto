@@ -1,10 +1,16 @@
-# Radietto 📻
+# Radietto
 
 > An experimental LLM-powered radio app. Like Pandora, but the DJ is an LLM.
 
-Radietto is a Flutter mobile app that uses an LLM to curate radio-style station queues, then streams the matching audio from YouTube. Tell it your taste across a few genres (or don't), pick a vibe, hit play, and the LLM keeps the queue refilled — learning from your thumbs up / thumbs down / skips as the session goes.
+Radietto is a Flutter app (Android, iOS, macOS) that uses an LLM to curate radio-style station queues, then streams the matching audio from YouTube. Tell it your taste across a few genres (or don't), pick a vibe, hit play, and the LLM keeps the queue refilled — learning from your thumbs up / thumbs down / skips as the session goes.
 
 This is a weekend-experiment / proof-of-concept. Lots of rough edges. Not production-ready. Read [`QUESTIONS.md`](QUESTIONS.md) for known caveats.
+
+## Screenshots
+
+| Browse stations | Now playing |
+| --- | --- |
+| ![Station browser](docs/screenshots/browser.png) | ![Now playing](docs/screenshots/now-playing.png) |
 
 ## How it works
 
@@ -33,7 +39,7 @@ cp .env.example .env
 flutter run
 ```
 
-## ⚠️ Caveats
+## Caveats
 
 - **API key bundling.** The `.env` file is shipped as a Flutter asset, which means whatever key you put in there is trivially extractable from the APK. Fine for a personal prototype; do not ship to a public store this way.
 - **Rate limiting.** All YouTube extraction calls are throttled to one every 2 seconds globally. First-launch warm-up of all 10 stations therefore takes a few minutes. Subsequent launches are near-instant thanks to caching.
