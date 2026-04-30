@@ -311,7 +311,7 @@ class _StationCard extends StatelessWidget {
                       child: Text(
                         station.tagline,
                         style: theme.textTheme.bodySmall,
-                        maxLines: 2,
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),

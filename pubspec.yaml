@@ -57,7 +57,7 @@ flutter_launcher_icons:
   remove_alpha_ios: true
   macos:
     generate: true
-    image_path: "assets/icon/radietto_icon.png"
+    image_path: "assets/icon/radietto_icon_macos.png"
   web:
     generate: true
     image_path: "assets/icon/radietto_icon.png"
