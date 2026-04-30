@@ -158,7 +158,7 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
                 maxCrossAxisExtent: 280,
                 mainAxisSpacing: 16,
                 crossAxisSpacing: 16,
-                childAspectRatio: 0.78,
+                childAspectRatio: 0.72,
               ),
               itemCount: stations.length,
               itemBuilder: (context, i) {
