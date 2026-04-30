@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart' show FileImage, imageCache;
 import 'package:uuid/uuid.dart';
 
 import '../data/station_templates.dart';
@@ -147,6 +148,47 @@ class StationEngine extends ChangeNotifier {
       _scheduleSave();
       notifyListeners();
     }
+  }
+
+  /// Re-roll the cover art for a custom station. Stock stations are
+  /// rejected — their art ships bundled and shouldn't change.
+  Future<void> regenerateArtFor(RadioStation station) async {
+    if (!station.isCustom) {
+      throw StateError('Cannot regenerate art for stock station ${station.id}');
+    }
+    // Drop the old art so the UI shows the emoji placeholder while the
+    // new tile is being generated, and so Image.file's path-keyed cache
+    // doesn't keep serving the previous image after we overwrite it.
+    final oldPath = station.imagePath;
+    await _art.deleteArtFor(station.id);
+    if (oldPath != null && oldPath.isNotEmpty) {
+      // FileImage caches by path string, so even after we overwrite the
+      // file at the same path the old bytes would still be served from
+      // memory until the cache is evicted.
+      imageCache.evict(FileImage(File(oldPath)));
+    }
+    station.imagePath = null;
+    _scheduleSave();
+    notifyListeners();
+    await _generateCustomArt(station);
+  }
+
+  /// Permanently remove a station from the list, delete its persisted
+  /// state (queue, history, cover art) and stop persisting it. Returns
+  /// true if a station was actually removed.
+  Future<bool> deleteStation(RadioStation station) async {
+    final removed = _stations.remove(station);
+    if (!removed) return false;
+    if (station.isCustom) {
+      // Stock stations have art bundled in the asset bundle — leave the
+      // copy in app support dir alone (it'll just be re-used if the
+      // station ever comes back). Custom-station art is purely on disk
+      // and should be cleaned up.
+      await _art.deleteArtFor(station.id);
+    }
+    _scheduleSave();
+    notifyListeners();
+    return true;
   }
 
   Future<void> _warmUpStation(RadioStation station) async {

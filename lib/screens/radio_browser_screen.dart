@@ -46,6 +46,98 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
     await context.read<PlayerProvider>().playStation(station);
   }
 
+  Future<void> _showStationMenu(
+      RadioStation station, Offset globalPosition) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    // Custom stations support both regenerate-art and delete; stock
+    // stations get nothing (no menu) — their art is bundled and we
+    // don't want users deleting the defaults.
+    if (!station.isCustom) return;
+    final selection = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(globalPosition, globalPosition),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'regenerate-art',
+          child: Row(children: [
+            Icon(Icons.refresh, size: 18),
+            SizedBox(width: 12),
+            Text('Regenerate cover art'),
+          ]),
+        ),
+        PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Row(children: [
+            Icon(Icons.delete_outline, size: 18, color: Colors.red),
+            SizedBox(width: 12),
+            Text('Delete station', style: TextStyle(color: Colors.red)),
+          ]),
+        ),
+      ],
+    );
+    if (!mounted || selection == null) return;
+    switch (selection) {
+      case 'regenerate-art':
+        await _regenerateArt(station);
+        break;
+      case 'delete':
+        await _confirmAndDelete(station);
+        break;
+    }
+  }
+
+  Future<void> _regenerateArt(RadioStation station) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 2),
+        content: Text('Regenerating cover art…'),
+      ),
+    );
+    try {
+      await context.read<StationEngine>().regenerateArtFor(station);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to regenerate art: $e')),
+      );
+    }
+  }
+
+  Future<void> _confirmAndDelete(RadioStation station) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${station.name}?'),
+        content: const Text(
+          'This permanently removes the station, its queue and its '
+          'listening history. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    // Stop playback first if this station is currently on air.
+    await context.read<PlayerProvider>().stopIfPlaying(station);
+    if (!mounted) return;
+    await context.read<StationEngine>().deleteStation(station);
+  }
+
   Future<void> _showCustomStationSheet() async {
     final controller = TextEditingController();
     final prompt = await showModalBottomSheet<String>(
@@ -166,6 +258,7 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
                 return _StationCard(
                   station: s,
                   onTap: () => _onTapStation(s),
+                  onContextMenu: (globalPos) => _showStationMenu(s, globalPos),
                 );
               },
             ),
@@ -176,13 +269,18 @@ class _RadioBrowserScreenState extends State<RadioBrowserScreen> {
 class _StationCard extends StatelessWidget {
   final RadioStation station;
   final VoidCallback onTap;
-  const _StationCard({required this.station, required this.onTap});
+  final ValueChanged<Offset>? onContextMenu;
+  const _StationCard({
+    required this.station,
+    required this.onTap,
+    this.onContextMenu,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final ready = station.isWarmedUp && station.firstUnplayed != null;
-    return Card(
+    final card = Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
@@ -239,6 +337,17 @@ class _StationCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+    if (onContextMenu == null) return card;
+    // GestureDetector handles both right-click on desktop
+    // (onSecondaryTapDown) and long-press on mobile (onLongPressStart),
+    // dispatching the global tap position to the host screen so it can
+    // anchor a popup menu there.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onSecondaryTapDown: (d) => onContextMenu!(d.globalPosition),
+      onLongPressStart: (d) => onContextMenu!(d.globalPosition),
+      child: card,
     );
   }
 }

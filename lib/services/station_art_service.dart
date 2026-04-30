@@ -77,4 +77,22 @@ class StationArtService {
       return null;
     }
   }
+
+  /// Delete any on-disk cover-art file for [stationId]. Used when the
+  /// user re-rolls the tile (so the next generation isn't masked by
+  /// Flutter's path-keyed FileImage cache) or deletes the station
+  /// outright. Silent on failure.
+  Future<void> deleteArtFor(String stationId) async {
+    try {
+      final dir = await _ensureDir();
+      for (final ext in const ['.webp', '.jpg', '.png']) {
+        final f = File('${dir.path}/$stationId$ext');
+        if (await f.exists()) {
+          await f.delete();
+        }
+      }
+    } catch (e) {
+      debugPrint('StationArtService.deleteArtFor failed: $e');
+    }
+  }
 }

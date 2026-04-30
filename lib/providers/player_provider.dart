@@ -420,4 +420,18 @@ class PlayerProvider extends ChangeNotifier {
     if (!File(p).existsSync()) return null;
     return Uri.file(p);
   }
+
+  /// If the given station is currently the playing station, stop audio
+  /// and clear the now-playing state. Used when the station is deleted.
+  Future<void> stopIfPlaying(RadioStation station) async {
+    if (_currentStation != station) return;
+    _playRequestId++;
+    try {
+      await audioHandler.stop();
+    } catch (_) {}
+    _currentStation = null;
+    _currentSong = null;
+    _isPreparing = false;
+    notifyListeners();
+  }
 }
