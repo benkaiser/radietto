@@ -21,6 +21,37 @@ import 'services/youtube_service.dart';
 
 late RadiettoAudioHandler _audioHandler;
 
+/// Intent fired by the global desktop spacebar shortcut.
+class _TogglePlayPauseIntent extends Intent {
+  const _TogglePlayPauseIntent();
+}
+
+/// Toggles play/pause, but is disabled while focus is inside an editable
+/// text field so users can still type spaces. When [isEnabled] returns
+/// false, the [Shortcuts] widget treats the key as unhandled and the
+/// event propagates normally to the focused [TextField].
+class _TogglePlayPauseAction extends Action<_TogglePlayPauseIntent> {
+  _TogglePlayPauseAction(this.player);
+
+  final PlayerProvider player;
+
+  @override
+  bool isEnabled(_TogglePlayPauseIntent intent, [BuildContext? context]) {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx != null &&
+        ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  Object? invoke(_TogglePlayPauseIntent intent) {
+    player.togglePlayPause();
+    return null;
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env');
@@ -118,18 +149,29 @@ class RadiettoApp extends StatelessWidget {
             ),
           ),
         ),
-        // Global desktop shortcut: spacebar toggles play/pause. The
-        // TextField inside the custom-station bottom sheet still
-        // consumes space first (because it has primary focus), so
-        // typing isn't disrupted.
+        // Global desktop shortcut: spacebar toggles play/pause, except
+        // when focus is inside an editable text field. We use Shortcuts +
+        // Actions (rather than CallbackShortcuts) so the action can
+        // disable itself via isEnabled — when disabled, the shortcut is
+        // not handled and the key event propagates to the TextField so
+        // the user can type a space.
         builder: (context, child) {
-          Widget content = CallbackShortcuts(
-            bindings: <ShortcutActivator, VoidCallback>{
-              const SingleActivator(LogicalKeyboardKey.space): () {
-                player.togglePlayPause();
-              },
+          Widget content = Shortcuts(
+            shortcuts: const <ShortcutActivator, Intent>{
+              SingleActivator(LogicalKeyboardKey.space):
+                  _TogglePlayPauseIntent(),
             },
-            child: Focus(autofocus: true, child: child!),
+            child: Actions(
+              actions: <Type, Action<Intent>>{
+                _TogglePlayPauseIntent: _TogglePlayPauseAction(player),
+              },
+              child: Focus(
+                autofocus: true,
+                skipTraversal: true,
+                canRequestFocus: false,
+                child: child!,
+              ),
+            ),
           );
 
           // On macOS we use NSWindow.fullSizeContentView so the Flutter
