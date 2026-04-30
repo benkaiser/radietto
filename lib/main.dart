@@ -1,4 +1,7 @@
+import 'dart:io' show Platform;
+
 import 'package:audio_service/audio_service.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -27,10 +30,10 @@ Future<void> main() async {
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
       overlays: SystemUiOverlay.values);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Color(0xFF1A1115),
+    statusBarColor: Color(0xFF0E1622),
     statusBarIconBrightness: Brightness.light,
     statusBarBrightness: Brightness.dark,
-    systemNavigationBarColor: Color(0xFF1A1115),
+    systemNavigationBarColor: Color(0xFF0E1622),
     systemNavigationBarIconBrightness: Brightness.light,
   ));
 
@@ -96,20 +99,21 @@ class RadiettoApp extends StatelessWidget {
         title: 'Radietto',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFFE94B6A),
+            seedColor: const Color(0xFF4C8DFF),
             brightness: Brightness.dark,
           ),
           useMaterial3: true,
           appBarTheme: const AppBarTheme(
-            backgroundColor: Color(0xFF2A1A1F),
+            backgroundColor: Color(0xFF15202E),
             foregroundColor: Colors.white,
             elevation: 4,
             scrolledUnderElevation: 4,
+            surfaceTintColor: Colors.transparent,
             systemOverlayStyle: SystemUiOverlayStyle(
-              statusBarColor: Color(0xFF1A1115),
+              statusBarColor: Color(0xFF0E1622),
               statusBarIconBrightness: Brightness.light,
               statusBarBrightness: Brightness.dark,
-              systemNavigationBarColor: Color(0xFF1A1115),
+              systemNavigationBarColor: Color(0xFF0E1622),
               systemNavigationBarIconBrightness: Brightness.light,
             ),
           ),
@@ -119,7 +123,7 @@ class RadiettoApp extends StatelessWidget {
         // consumes space first (because it has primary focus), so
         // typing isn't disrupted.
         builder: (context, child) {
-          return CallbackShortcuts(
+          Widget content = CallbackShortcuts(
             bindings: <ShortcutActivator, VoidCallback>{
               const SingleActivator(LogicalKeyboardKey.space): () {
                 player.togglePlayPause();
@@ -127,6 +131,26 @@ class RadiettoApp extends StatelessWidget {
             },
             child: Focus(autofocus: true, child: child!),
           );
+
+          // On macOS we use NSWindow.fullSizeContentView so the Flutter
+          // surface extends under the (transparent) titlebar. Reserve a
+          // 28px strip at the top, painted in the AppBar color, so the
+          // traffic-light controls have somewhere to sit without overlapping
+          // AppBar leading icons / actions. The strip is non-interactive,
+          // so isMovableByWindowBackground keeps it draggable.
+          if (!kIsWeb && Platform.isMacOS) {
+            content = Column(
+              children: [
+                Container(
+                  height: 28,
+                  color: const Color(0xFF15202E),
+                ),
+                Expanded(child: content),
+              ],
+            );
+          }
+
+          return content;
         },
         home: tasteProvider.onboardingDone
             ? const RadioBrowserScreen()
