@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
@@ -8,6 +10,7 @@ import '../models/genre_preference.dart';
 import '../models/radio_station.dart';
 import '../models/song.dart';
 import 'llm_service.dart';
+import 'station_art_service.dart';
 import 'station_storage.dart';
 import 'youtube_service.dart';
 
@@ -17,6 +20,7 @@ class StationEngine extends ChangeNotifier {
   final LlmService _llm;
   final YoutubeService _youtube;
   final StationStorage _storage;
+  final StationArtService _art;
   final List<GenrePreference> Function() _tastesGetter;
 
   final List<RadioStation> _stations = [];
@@ -29,10 +33,12 @@ class StationEngine extends ChangeNotifier {
     required LlmService llm,
     required YoutubeService youtube,
     required StationStorage storage,
+    required StationArtService art,
     required List<GenrePreference> Function() tastesGetter,
   })  : _llm = llm,
         _youtube = youtube,
         _storage = storage,
+        _art = art,
         _tastesGetter = tastesGetter;
 
   List<RadioStation> get stations => List.unmodifiable(_stations);
@@ -68,6 +74,12 @@ class StationEngine extends ChangeNotifier {
 
     notifyListeners();
 
+    // Resolve cover art for every template station that has a bundled tile
+    // but no on-disk copy yet. This is async + safe to run in parallel
+    // with warm-up; we notify when each one completes so the UI can
+    // refresh its tile.
+    unawaited(_hydrateBundledArt());
+
     // Only warm up stations that don't already have any unplayed songs in
     // their queue. videoIds and stream URLs are resolved just-in-time.
     for (final station in _stations) {
@@ -78,6 +90,25 @@ class StationEngine extends ChangeNotifier {
       } else {
         // Persisted queues already have songs — they're warm.
         station.isWarmedUp = true;
+      }
+    }
+  }
+
+  Future<void> _hydrateBundledArt() async {
+    for (final tpl in kStationTemplates) {
+      final asset = tpl.imageAsset;
+      if (asset == null) continue;
+      final station = _stations.firstWhereOrNull((s) => s.id == tpl.id);
+      if (station == null) continue;
+      if (station.imagePath != null && File(station.imagePath!).existsSync()) {
+        continue;
+      }
+      final path =
+          await _art.ensureBundledCopy(stationId: tpl.id, assetPath: asset);
+      if (path != null) {
+        station.imagePath = path;
+        _scheduleSave();
+        notifyListeners();
       }
     }
   }
@@ -97,7 +128,25 @@ class StationEngine extends ChangeNotifier {
     notifyListeners();
     _scheduleSave();
     _warmUpStation(station);
+    // Generate cover art in the background — don't block warm-up on it.
+    // If Replicate is down/slow/disabled the tile just falls back to the
+    // emoji.
+    unawaited(_generateCustomArt(station));
     return station;
+  }
+
+  Future<void> _generateCustomArt(RadioStation station) async {
+    final path = await _art.generateForCustomStation(
+      stationId: station.id,
+      moodPrompt: station.moodPrompt,
+      name: station.name,
+      tagline: station.tagline,
+    );
+    if (path != null) {
+      station.imagePath = path;
+      _scheduleSave();
+      notifyListeners();
+    }
   }
 
   Future<void> _warmUpStation(RadioStation station) async {

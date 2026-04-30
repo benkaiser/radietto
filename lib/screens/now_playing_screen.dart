@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -164,10 +166,21 @@ class _StationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Cover-art size mirrors the emoji size (which the caller picks based
+    // on layout) so the visual weight stays consistent between desktop
+    // and mobile, and between stations with and without art.
+    final artSide = emojiSize * 1.6;
     return Column(
       children: [
-        Text(station.emoji, style: TextStyle(fontSize: emojiSize)),
-        const SizedBox(height: 8),
+        SizedBox(
+          width: artSide,
+          height: artSide,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: _StationArt(station: station, emojiSize: emojiSize),
+          ),
+        ),
+        const SizedBox(height: 12),
         Text(
           station.tagline,
           style: theme.textTheme.bodyMedium
@@ -175,6 +188,37 @@ class _StationHeader extends StatelessWidget {
           textAlign: TextAlign.center,
         ),
       ],
+    );
+  }
+}
+
+class _StationArt extends StatelessWidget {
+  final RadioStation station;
+  final double emojiSize;
+  const _StationArt({required this.station, required this.emojiSize});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final p = station.imagePath;
+    if (p != null && p.isNotEmpty) {
+      final file = File(p);
+      if (file.existsSync()) {
+        return Image.file(
+          file,
+          fit: BoxFit.cover,
+          errorBuilder: (ctx, err, stack) => _emojiFallback(theme),
+        );
+      }
+    }
+    return _emojiFallback(theme);
+  }
+
+  Widget _emojiFallback(ThemeData theme) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: Text(station.emoji, style: TextStyle(fontSize: emojiSize)),
     );
   }
 }

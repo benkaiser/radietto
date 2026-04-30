@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -16,6 +18,8 @@ class MiniPlayer extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final theme = Theme.of(context);
+    final art = station.imagePath;
+    final hasArt = art != null && art.isNotEmpty && File(art).existsSync();
     return Material(
       color: theme.colorScheme.surfaceContainerHighest,
       elevation: 8,
@@ -28,10 +32,24 @@ class MiniPlayer extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const NowPlayingScreen()),
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: Row(
                 children: [
-                  Text(station.emoji, style: const TextStyle(fontSize: 28)),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: hasArt
+                          ? Image.file(File(art), fit: BoxFit.cover)
+                          : Container(
+                              color: theme.colorScheme.surfaceContainerHigh,
+                              alignment: Alignment.center,
+                              child: Text(station.emoji,
+                                  style: const TextStyle(fontSize: 28)),
+                            ),
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(

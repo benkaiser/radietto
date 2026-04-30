@@ -56,7 +56,8 @@ class RadiettoAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
-  Future<void> playSong(Song song, {String? stationName}) async {
+  Future<void> playSong(Song song,
+      {String? stationName, Uri? stationArtUri}) async {
     if (song.streamUrl == null) {
       throw StateError('Song has no streamUrl yet');
     }
@@ -67,11 +68,11 @@ class RadiettoAudioHandler extends BaseAudioHandler with SeekHandler {
       artist: song.artist,
       album: stationName,
       duration: song.duration,
-      // Intentionally no artUri — YouTube signed thumbnail URLs were
-      // tripping up flutter_cache_manager's SQLite cache (database locked).
-      // The in-app UI uses station emojis, so the media notification just
-      // gets the default placeholder. We can revisit later with a bundled
-      // asset or per-station local image.
+      // Use the station's local cover-art file (file:// URI) as the
+      // artUri shown in the OS media controls. We don't expose YouTube
+      // signed thumbnail URLs here because flutter_cache_manager's
+      // SQLite cache trips on them ("database locked").
+      artUri: stationArtUri,
     );
     this.mediaItem.add(mediaItem);
     await _player.setUrl(song.streamUrl!);

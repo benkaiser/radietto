@@ -16,10 +16,18 @@ class RadioStation {
   bool isGenerating;
 
   /// Last song that was playing on this station (by id) and the position
-  /// reached within it. Used to resume mid-song when the user returns to
-  /// this station or relaunches the app.
+  /// reached within it. Used to resume mid-song when the user switches
+  /// stations or relaunches the app.
   String? lastPlayedSongId;
   int? lastPlayedPositionMs;
+
+  /// Absolute filesystem path to this station's cover-art image, or null
+  /// if there is no art (UI falls back to [emoji]). Bundled tiles are
+  /// copied out of the asset bundle on first launch; custom-station art
+  /// is generated via Replicate at station-creation time. Stored as a
+  /// plain path so we can hand it to the OS media controls as a
+  /// `file://` URI.
+  String? imagePath;
 
   RadioStation({
     required this.id,
@@ -34,6 +42,7 @@ class RadioStation {
     this.isGenerating = false,
     this.lastPlayedSongId,
     this.lastPlayedPositionMs,
+    this.imagePath,
   })  : queue = queue ?? [],
         history = history ?? [];
 
@@ -78,6 +87,7 @@ class RadioStation {
         'history': history.map((s) => s.toJson()).toList(),
         'lastPlayedSongId': lastPlayedSongId,
         'lastPlayedPositionMs': lastPlayedPositionMs,
+        'imagePath': imagePath,
       };
 
   factory RadioStation.fromJson(Map<String, dynamic> json) {
@@ -98,6 +108,7 @@ class RadioStation {
       history: history,
       lastPlayedSongId: json['lastPlayedSongId'] as String?,
       lastPlayedPositionMs: json['lastPlayedPositionMs'] as int?,
+      imagePath: json['imagePath'] as String?,
     );
     // Station is warm if there's any unplayed song queued — videoIds
     // and stream URLs are resolved just-in-time on playback.

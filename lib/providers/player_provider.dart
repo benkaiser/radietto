@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -156,7 +157,7 @@ class PlayerProvider extends ChangeNotifier {
 
     if (requestId != _playRequestId) return;
     try {
-      await audioHandler.playSong(song, stationName: station.name);
+      await audioHandler.playSong(song, stationName: station.name, stationArtUri: _artUriFor(station));
     } catch (e) {
       debugPrint('Audio load failed for "${song.title}": $e');
       if (requestId != _playRequestId) return;
@@ -327,7 +328,7 @@ class PlayerProvider extends ChangeNotifier {
     }
 
     try {
-      await audioHandler.playSong(song, stationName: station.name);
+      await audioHandler.playSong(song, stationName: station.name, stationArtUri: _artUriFor(station));
     } catch (e) {
       if (requestId != _playRequestId) return;
       song.played = true;
@@ -408,5 +409,15 @@ class PlayerProvider extends ChangeNotifier {
       // Fire-and-forget; engine will notify listeners as it progresses.
       engine.replenish(station);
     }
+  }
+
+  /// Build a `file://` URI for the station's cover art if one is available
+  /// on disk. Returned to the OS media controls so notifications/lock
+  /// screens can show the station tile.
+  Uri? _artUriFor(RadioStation station) {
+    final p = station.imagePath;
+    if (p == null || p.isEmpty) return null;
+    if (!File(p).existsSync()) return null;
+    return Uri.file(p);
   }
 }

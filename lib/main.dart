@@ -10,6 +10,8 @@ import 'screens/radio_browser_screen.dart';
 import 'screens/taste_onboarding_screen.dart';
 import 'services/audio_handler.dart';
 import 'services/llm_service.dart';
+import 'services/replicate_service.dart';
+import 'services/station_art_service.dart';
 import 'services/station_engine.dart';
 import 'services/station_storage.dart';
 import 'services/youtube_service.dart';
@@ -48,10 +50,13 @@ Future<void> main() async {
   final llm = LlmService();
   final yt = YoutubeService(llm: llm);
   final storage = StationStorage();
+  final replicate = ReplicateService();
+  final art = StationArtService(replicate: replicate);
   final engine = StationEngine(
     llm: llm,
     youtube: yt,
     storage: storage,
+    art: art,
     tastesGetter: () => tasteProvider.tastes,
   );
 
